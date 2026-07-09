@@ -8,22 +8,36 @@ A Streamlit version of the original React construction cost tracker page.
 - Editable Labour, Material, and Misc budgets
 - Spend charts by category, project phase, and month
 - Expense creation with optional bill or invoice upload
+- Expense editing from the Manage Expenses tab
 - CSV import with row-level validation
 - CSV export and downloadable import template
-- SQLite storage for expenses, budgets, and uploaded bill files
+- PostgreSQL storage for expenses, budgets, and uploaded bill files
 - Bill download and image preview for saved attachments
 
 ## Storage
 
-The app creates a SQLite database at:
+For permanent storage on Streamlit Community Cloud, use a hosted PostgreSQL database
+such as Supabase, Neon, Railway Postgres, Render Postgres, or managed Postgres.
+Set the database connection string as a Streamlit secret:
+
+```toml
+DATABASE_URL = "postgresql://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require"
+```
+
+The app also accepts the same value as an environment variable named
+`DATABASE_URL`, or as a Streamlit connection-style secret named
+`connections.postgres.url`, `connections.postgresql.url`, `connections.sql.url`,
+`connections.cost_tracker.url`, or `connections.construction_cost.url`.
+
+When `DATABASE_URL` is not set, the app falls back to a local SQLite database at:
 
 ```text
 data/construction_cost_tracker.db
 ```
 
-Expenses, category budgets, and uploaded bills are saved there and are loaded again when the app opens. You can change the database path by setting the `COST_TRACKER_DB_PATH` environment variable.
-
-For Streamlit Community Cloud, SQLite works for simple single-app usage, but the app filesystem can be reset during redeploys or infrastructure restarts. For business-critical permanent cloud storage, use a hosted database such as Supabase, Neon, or managed Postgres.
+SQLite is useful for local testing, but Streamlit Community Cloud can reset app
+files during redeploys or infrastructure restarts. Use PostgreSQL for data that
+must remain permanently available.
 
 ## Run Locally
 
@@ -57,6 +71,7 @@ git push -u origin main
 
 4. Open Streamlit Community Cloud and create a new app from the GitHub repository.
 5. Set the main file path to `app.py`.
-6. Deploy.
+6. In app secrets, add your PostgreSQL `DATABASE_URL`.
+7. Deploy.
 
 GitHub Pages cannot host this app directly because Streamlit needs a Python server. Streamlit Community Cloud, Render, Railway, or a VPS are suitable hosting targets.

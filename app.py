@@ -4,10 +4,7 @@ import html
 import io
 import os
 import re
-import sqlite3
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -15,6 +12,8 @@ from typing import Any
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 
 
 CATEGORIES = ["Labour", "Material", "Misc"]
@@ -59,6 +58,16 @@ DB_PATH = (
     if CONFIGURED_DB_PATH.is_absolute()
     else BASE_DIR / CONFIGURED_DB_PATH
 )
+DATABASE_URL_KEYS = ("DATABASE_URL", "database_url")
+CONNECTION_SECRET_NAMES = (
+    "construction_cost",
+    "cost_tracker",
+    "postgres",
+    "postgresql",
+    "sql",
+)
+_ENGINE: Engine | None = None
+_ENGINE_URL: str | None = None
 
 SEED_EXPENSES = [
     {
@@ -231,115 +240,242 @@ CSV_TEMPLATE = (
 )
 
 
-@contextmanager
-def connect_db() -> Iterator[sqlite3.Connection]:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DB_PATH)
-    connection.row_factory = sqlite3.Row
+def get_streamlit_secret(key: str) -> str | None:
     try:
-        yield connection
-        connection.commit()
-    finally:
-        connection.close()
+        value = st.secrets.get(key)
+    except Exception:
+        return None
+    return str(value).strip() if value else None
+
+
+def get_streamlit_connection_url() -> str | None:
+    try:
+        connections = st.secrets.get("connections", {})
+    except Exception:
+        return None
+
+    if not hasattr(connections, "get"):
+        return None
+
+    for name in CONNECTION_SECRET_NAMES:
+        connection = connections.get(name)
+        if hasattr(connection, "get"):
+            value = connection.get("url")
+            if value:
+                return str(value).strip()
+
+    return None
+
+
+def configured_database_url() -> str | None:
+    for key in DATABASE_URL_KEYS:
+        value = os.getenv(key)
+        if value:
+            return value.strip()
+
+    for key in DATABASE_URL_KEYS:
+        value = get_streamlit_secret(key)
+        if value:
+            return value
+
+    connection_url = get_streamlit_connection_url()
+    if connection_url:
+        return connection_url
+
+    return None
+
+
+def normalize_database_url(database_url: str) -> str:
+    if database_url.startswith("postgres://"):
+        return f"postgresql+psycopg2://{database_url.removeprefix('postgres://')}"
+    if database_url.startswith("postgresql://"):
+        return f"postgresql+psycopg2://{database_url.removeprefix('postgresql://')}"
+    return database_url
+
+
+def local_sqlite_url() -> str:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{DB_PATH.as_posix()}"
+
+
+def database_url() -> str:
+    configured_url = configured_database_url()
+    if configured_url:
+        return normalize_database_url(configured_url)
+    return local_sqlite_url()
+
+
+def get_engine() -> Engine:
+    global _ENGINE, _ENGINE_URL
+
+    url = database_url()
+    if _ENGINE is not None and _ENGINE_URL == url:
+        return _ENGINE
+
+    kwargs: dict[str, Any] = {"pool_pre_ping": True}
+    if url.startswith("sqlite:"):
+        kwargs["connect_args"] = {"check_same_thread": False}
+
+    _ENGINE = create_engine(url, **kwargs)
+    _ENGINE_URL = url
+    return _ENGINE
+
+
+def using_postgres() -> bool:
+    return get_engine().url.get_backend_name().startswith("postgresql")
+
+
+def database_storage_label() -> str:
+    if using_postgres():
+        return "PostgreSQL from DATABASE_URL"
+    return f"SQLite at {DB_PATH}"
+
+
+def normalize_receipt_bytes(value: Any) -> bytes | None:
+    if value is None:
+        return None
+    if isinstance(value, memoryview):
+        return value.tobytes()
+    if isinstance(value, bytearray):
+        return bytes(value)
+    return value
 
 
 def initialize_database() -> None:
-    with connect_db() as connection:
+    amount_type = "DOUBLE PRECISION" if using_postgres() else "REAL"
+    receipt_type = "BYTEA" if using_postgres() else "BLOB"
+
+    with get_engine().begin() as connection:
         connection.execute(
-            """
+            text(
+                """
             CREATE TABLE IF NOT EXISTS app_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             )
             """
+            )
         )
         connection.execute(
-            """
+            text(
+                f"""
             CREATE TABLE IF NOT EXISTS budgets (
                 category TEXT PRIMARY KEY,
-                amount REAL NOT NULL
+                amount {amount_type} NOT NULL
             )
             """
+            )
         )
         connection.execute(
-            """
+            text(
+                f"""
             CREATE TABLE IF NOT EXISTS expenses (
                 id TEXT PRIMARY KEY,
                 date TEXT NOT NULL,
                 category TEXT NOT NULL,
                 phase TEXT NOT NULL,
                 description TEXT NOT NULL,
-                amount REAL NOT NULL,
+                amount {amount_type} NOT NULL,
                 receipt_name TEXT,
                 receipt_type TEXT,
-                receipt_bytes BLOB,
+                receipt_bytes {receipt_type},
                 created_at TEXT NOT NULL
             )
             """
+            )
         )
 
         for category, amount in DEFAULT_CATEGORY_BUDGETS.items():
             connection.execute(
-                "INSERT OR IGNORE INTO budgets (category, amount) VALUES (?, ?)",
-                (category, amount),
+                text(
+                    """
+                    INSERT INTO budgets (category, amount)
+                    VALUES (:category, :amount)
+                    ON CONFLICT(category) DO NOTHING
+                    """
+                ),
+                {"category": category, "amount": amount},
             )
 
         seeded = connection.execute(
-            "SELECT value FROM app_meta WHERE key = 'seeded'"
+            text("SELECT value FROM app_meta WHERE key = :key"),
+            {"key": "seeded"},
         ).fetchone()
         if seeded is None:
             expense_count = connection.execute(
-                "SELECT COUNT(*) FROM expenses"
-            ).fetchone()[0]
+                text("SELECT COUNT(*) FROM expenses")
+            ).scalar_one()
             if expense_count == 0:
                 now = datetime.utcnow().isoformat()
-                connection.executemany(
-                    """
+                connection.execute(
+                    text(
+                        """
                     INSERT INTO expenses (
                         id, date, category, phase, description, amount,
                         receipt_name, receipt_type, receipt_bytes, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                    VALUES (
+                        :id, :date, :category, :phase, :description, :amount,
+                        :receipt_name, :receipt_type, :receipt_bytes, :created_at
+                    )
+                    """
+                    ),
                     [
-                        (
-                            expense["id"],
-                            expense["date"],
-                            expense["category"],
-                            expense["phase"],
-                            expense["description"],
-                            float(expense["amount"]),
-                            None,
-                            None,
-                            None,
-                            now,
-                        )
+                        {
+                            "id": expense["id"],
+                            "date": expense["date"],
+                            "category": expense["category"],
+                            "phase": expense["phase"],
+                            "description": expense["description"],
+                            "amount": float(expense["amount"]),
+                            "receipt_name": None,
+                            "receipt_type": None,
+                            "receipt_bytes": None,
+                            "created_at": now,
+                        }
                         for expense in SEED_EXPENSES
                     ],
                 )
             connection.execute(
-                "INSERT OR REPLACE INTO app_meta (key, value) VALUES ('seeded', '1')"
+                text(
+                    """
+                    INSERT INTO app_meta (key, value)
+                    VALUES (:key, :value)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """
+                ),
+                {"key": "seeded", "value": "1"},
             )
 
 
 def load_expenses_from_db() -> list[dict[str, Any]]:
-    with connect_db() as connection:
+    with get_engine().connect() as connection:
         rows = connection.execute(
-            """
+            text(
+                """
             SELECT
                 id, date, category, phase, description, amount,
                 receipt_name, receipt_type, receipt_bytes
             FROM expenses
             ORDER BY date DESC, created_at DESC, id DESC
             """
-        ).fetchall()
-    return [dict(row) for row in rows]
+            )
+        ).mappings().all()
+
+    expenses = []
+    for row in rows:
+        expense = dict(row)
+        expense["receipt_bytes"] = normalize_receipt_bytes(expense.get("receipt_bytes"))
+        expenses.append(expense)
+    return expenses
 
 
 def load_budgets_from_db() -> dict[str, float]:
     budgets = dict(DEFAULT_CATEGORY_BUDGETS)
-    with connect_db() as connection:
-        rows = connection.execute("SELECT category, amount FROM budgets").fetchall()
+    with get_engine().connect() as connection:
+        rows = connection.execute(
+            text("SELECT category, amount FROM budgets")
+        ).mappings().all()
     for row in rows:
         if row["category"] in budgets:
             budgets[row["category"]] = float(row["amount"])
@@ -347,26 +483,32 @@ def load_budgets_from_db() -> dict[str, float]:
 
 
 def save_budget_to_db(category: str, amount: float) -> None:
-    with connect_db() as connection:
+    with get_engine().begin() as connection:
         connection.execute(
-            """
+            text(
+                """
             INSERT INTO budgets (category, amount)
-            VALUES (?, ?)
+            VALUES (:category, :amount)
             ON CONFLICT(category) DO UPDATE SET amount = excluded.amount
-            """,
-            (category, float(amount)),
+            """
+            ),
+            {"category": category, "amount": float(amount)},
         )
 
 
 def save_expense_to_db(expense: dict[str, Any]) -> None:
-    with connect_db() as connection:
+    with get_engine().begin() as connection:
         connection.execute(
-            """
+            text(
+                """
             INSERT INTO expenses (
                 id, date, category, phase, description, amount,
                 receipt_name, receipt_type, receipt_bytes, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (
+                :id, :date, :category, :phase, :description, :amount,
+                :receipt_name, :receipt_type, :receipt_bytes, :created_at
+            )
             ON CONFLICT(id) DO UPDATE SET
                 date = excluded.date,
                 category = excluded.category,
@@ -376,19 +518,20 @@ def save_expense_to_db(expense: dict[str, Any]) -> None:
                 receipt_name = excluded.receipt_name,
                 receipt_type = excluded.receipt_type,
                 receipt_bytes = excluded.receipt_bytes
-            """,
-            (
-                expense["id"],
-                expense["date"],
-                expense["category"],
-                expense["phase"],
-                expense["description"],
-                float(expense["amount"]),
-                expense.get("receipt_name"),
-                expense.get("receipt_type"),
-                expense.get("receipt_bytes"),
-                datetime.utcnow().isoformat(),
+            """
             ),
+            {
+                "id": expense["id"],
+                "date": expense["date"],
+                "category": expense["category"],
+                "phase": expense["phase"],
+                "description": expense["description"],
+                "amount": float(expense["amount"]),
+                "receipt_name": expense.get("receipt_name"),
+                "receipt_type": expense.get("receipt_type"),
+                "receipt_bytes": expense.get("receipt_bytes"),
+                "created_at": datetime.utcnow().isoformat(),
+            },
         )
 
 
@@ -396,14 +539,18 @@ def save_expenses_to_db(expenses: list[dict[str, Any]]) -> None:
     if not expenses:
         return
     now = datetime.utcnow().isoformat()
-    with connect_db() as connection:
-        connection.executemany(
-            """
+    with get_engine().begin() as connection:
+        connection.execute(
+            text(
+                """
             INSERT INTO expenses (
                 id, date, category, phase, description, amount,
                 receipt_name, receipt_type, receipt_bytes, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (
+                :id, :date, :category, :phase, :description, :amount,
+                :receipt_name, :receipt_type, :receipt_bytes, :created_at
+            )
             ON CONFLICT(id) DO UPDATE SET
                 date = excluded.date,
                 category = excluded.category,
@@ -413,33 +560,63 @@ def save_expenses_to_db(expenses: list[dict[str, Any]]) -> None:
                 receipt_name = excluded.receipt_name,
                 receipt_type = excluded.receipt_type,
                 receipt_bytes = excluded.receipt_bytes
-            """,
+            """
+            ),
             [
-                (
-                    expense["id"],
-                    expense["date"],
-                    expense["category"],
-                    expense["phase"],
-                    expense["description"],
-                    float(expense["amount"]),
-                    expense.get("receipt_name"),
-                    expense.get("receipt_type"),
-                    expense.get("receipt_bytes"),
-                    now,
-                )
+                {
+                    "id": expense["id"],
+                    "date": expense["date"],
+                    "category": expense["category"],
+                    "phase": expense["phase"],
+                    "description": expense["description"],
+                    "amount": float(expense["amount"]),
+                    "receipt_name": expense.get("receipt_name"),
+                    "receipt_type": expense.get("receipt_type"),
+                    "receipt_bytes": expense.get("receipt_bytes"),
+                    "created_at": now,
+                }
                 for expense in expenses
             ],
         )
 
 
+def update_expense_details_in_db(expense: dict[str, Any]) -> None:
+    with get_engine().begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE expenses
+                SET
+                    date = :date,
+                    category = :category,
+                    phase = :phase,
+                    description = :description,
+                    amount = :amount
+                WHERE id = :id
+                """
+            ),
+            {
+                "id": expense["id"],
+                "date": expense["date"],
+                "category": expense["category"],
+                "phase": expense["phase"],
+                "description": expense["description"],
+                "amount": float(expense["amount"]),
+            },
+        )
+
+
 def delete_expense_from_db(expense_id: str) -> None:
-    with connect_db() as connection:
-        connection.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
+    with get_engine().begin() as connection:
+        connection.execute(
+            text("DELETE FROM expenses WHERE id = :expense_id"),
+            {"expense_id": expense_id},
+        )
 
 
 def clear_expenses_from_db() -> None:
-    with connect_db() as connection:
-        connection.execute("DELETE FROM expenses")
+    with get_engine().begin() as connection:
+        connection.execute(text("DELETE FROM expenses"))
 
 
 def update_receipt_in_db(
@@ -448,26 +625,37 @@ def update_receipt_in_db(
     receipt_type: str,
     receipt_bytes: bytes,
 ) -> None:
-    with connect_db() as connection:
+    with get_engine().begin() as connection:
         connection.execute(
-            """
+            text(
+                """
             UPDATE expenses
-            SET receipt_name = ?, receipt_type = ?, receipt_bytes = ?
-            WHERE id = ?
-            """,
-            (receipt_name, receipt_type, receipt_bytes, expense_id),
+            SET receipt_name = :receipt_name,
+                receipt_type = :receipt_type,
+                receipt_bytes = :receipt_bytes
+            WHERE id = :expense_id
+            """
+            ),
+            {
+                "receipt_name": receipt_name,
+                "receipt_type": receipt_type,
+                "receipt_bytes": receipt_bytes,
+                "expense_id": expense_id,
+            },
         )
 
 
 def remove_receipt_from_db(expense_id: str) -> None:
-    with connect_db() as connection:
+    with get_engine().begin() as connection:
         connection.execute(
-            """
+            text(
+                """
             UPDATE expenses
             SET receipt_name = NULL, receipt_type = NULL, receipt_bytes = NULL
-            WHERE id = ?
-            """,
-            (expense_id,),
+            WHERE id = :expense_id
+            """
+            ),
+            {"expense_id": expense_id},
         )
 
 
@@ -487,6 +675,10 @@ def init_state() -> None:
         st.session_state.receipt_upload_versions = {}
     if "last_import_result" not in st.session_state:
         st.session_state.last_import_result = None
+    if "editing_expense_id" not in st.session_state:
+        st.session_state.editing_expense_id = None
+    if "edit_form_version" not in st.session_state:
+        st.session_state.edit_form_version = 0
 
 
 def indian_grouped(value: float) -> str:
@@ -540,6 +732,13 @@ def parse_date(raw: Any) -> str | None:
     return parsed.date().isoformat()
 
 
+def expense_date_for_input(raw: Any) -> date:
+    parsed = pd.to_datetime(raw, errors="coerce")
+    if pd.isna(parsed):
+        return date.today()
+    return parsed.date()
+
+
 def get_expenses_frame() -> pd.DataFrame:
     columns = [
         "id",
@@ -586,12 +785,22 @@ def append_expense(expense: dict[str, Any]) -> None:
     st.session_state.clear_confirm = False
 
 
+def update_expense_details(expense: dict[str, Any]) -> None:
+    update_expense_details_in_db(expense)
+    st.session_state.expenses = load_expenses_from_db()
+    st.session_state.editing_expense_id = None
+    st.session_state.edit_form_version += 1
+    st.session_state.clear_confirm = False
+
+
 def delete_expense(expense_id: str) -> None:
     delete_expense_from_db(expense_id)
     st.session_state.expenses = [
         expense for expense in st.session_state.expenses if expense["id"] != expense_id
     ]
     st.session_state.receipt_upload_versions.pop(expense_id, None)
+    if st.session_state.editing_expense_id == expense_id:
+        st.session_state.editing_expense_id = None
 
 
 def update_expense_receipt(expense_id: str, uploaded_file: Any) -> None:
@@ -991,6 +1200,8 @@ def render_import_export() -> None:
                     "skipped": skipped,
                     "reasons": reasons,
                 }
+                st.session_state.editing_expense_id = None
+                st.session_state.edit_form_version += 1
                 st.session_state.csv_form_version += 1
                 st.rerun()
 
@@ -1056,6 +1267,90 @@ def render_add_expense_form() -> None:
     st.rerun()
 
 
+def render_edit_expense_form(expense: dict[str, Any]) -> None:
+    expense_id = str(expense["id"])
+    st.markdown("**Edit expense**")
+    form_key = f"edit_expense_form_{expense_id}_{st.session_state.edit_form_version}"
+
+    category_value = str(expense.get("category", CATEGORIES[0]))
+    phase_value = str(expense.get("phase", PHASES[0]))
+    category_index = CATEGORIES.index(category_value) if category_value in CATEGORIES else 0
+    phase_index = PHASES.index(phase_value) if phase_value in PHASES else 0
+
+    with st.form(form_key):
+        col1, col2, col3, col4 = st.columns(4)
+        edited_date = col1.date_input(
+            "Date",
+            value=expense_date_for_input(expense.get("date")),
+            key=f"edit_date_{expense_id}",
+        )
+        edited_category = col2.selectbox(
+            "Category",
+            CATEGORIES,
+            index=category_index,
+            key=f"edit_category_{expense_id}",
+        )
+        edited_phase = col3.selectbox(
+            "Phase",
+            PHASES,
+            index=phase_index,
+            key=f"edit_phase_{expense_id}",
+        )
+        edited_amount = col4.number_input(
+            "Amount",
+            min_value=0.0,
+            value=float(expense.get("amount") or 0.0),
+            step=1000.0,
+            key=f"edit_amount_{expense_id}",
+        )
+        edited_description = st.text_input(
+            "Description",
+            value=str(expense.get("description") or ""),
+            key=f"edit_description_{expense_id}",
+        )
+        save_col, cancel_col = st.columns(2)
+        with save_col:
+            save_submitted = st.form_submit_button(
+                "Save changes",
+                type="primary",
+                use_container_width=True,
+            )
+        with cancel_col:
+            cancel_submitted = st.form_submit_button(
+                "Cancel",
+                use_container_width=True,
+            )
+
+    if cancel_submitted:
+        st.session_state.editing_expense_id = None
+        st.session_state.edit_form_version += 1
+        st.rerun()
+
+    if not save_submitted:
+        return
+
+    if not edited_description.strip():
+        st.error("Please add a description.")
+        return
+    if edited_amount <= 0:
+        st.error("Please enter an amount greater than 0.")
+        return
+
+    updated_expense = dict(expense)
+    updated_expense.update(
+        {
+            "date": edited_date.isoformat(),
+            "category": edited_category,
+            "phase": edited_phase,
+            "description": edited_description.strip(),
+            "amount": float(edited_amount),
+        }
+    )
+    update_expense_details(updated_expense)
+    st.success("Expense updated.")
+    st.rerun()
+
+
 def render_receipt_controls(expense: dict[str, Any]) -> None:
     expense_id = expense["id"]
     receipt_name = expense.get("receipt_name")
@@ -1108,6 +1403,9 @@ def render_expense_log(frame: pd.DataFrame) -> None:
                 clear_expenses_from_db()
                 st.session_state.expenses = []
                 st.session_state.clear_confirm = False
+                st.session_state.receipt_upload_versions = {}
+                st.session_state.editing_expense_id = None
+                st.session_state.edit_form_version += 1
                 st.rerun()
             if cancel_col.button("Cancel", use_container_width=True):
                 st.session_state.clear_confirm = False
@@ -1129,9 +1427,26 @@ def render_expense_log(frame: pd.DataFrame) -> None:
 
     st.caption(f"{len(display_frame)} expense(s)")
     for expense in display_frame.to_dict("records"):
+        expense_id = str(expense["id"])
+        is_editing = st.session_state.editing_expense_id == expense_id
         with st.container(border=True):
-            detail_col, amount_col, receipt_col, delete_col = st.columns(
-                [0.52, 0.16, 0.22, 0.10],
+            if is_editing:
+                render_edit_expense_form(expense)
+                receipt_col, actions_col = st.columns([0.72, 0.28])
+                with receipt_col:
+                    render_receipt_controls(expense)
+                with actions_col:
+                    if st.button(
+                        "Delete",
+                        key=f"delete_editing_{expense_id}",
+                        use_container_width=True,
+                    ):
+                        delete_expense(expense_id)
+                        st.rerun()
+                continue
+
+            detail_col, amount_col, receipt_col, actions_col = st.columns(
+                [0.46, 0.16, 0.22, 0.16],
                 vertical_alignment="center",
             )
             category = str(expense["category"])
@@ -1151,13 +1466,17 @@ def render_expense_log(frame: pd.DataFrame) -> None:
                 )
             with receipt_col:
                 render_receipt_controls(expense)
-            with delete_col:
-                if st.button("Delete", key=f"delete_{expense['id']}", use_container_width=True):
-                    delete_expense(expense["id"])
+            with actions_col:
+                if st.button("Edit", key=f"edit_{expense_id}", use_container_width=True):
+                    st.session_state.editing_expense_id = expense_id
+                    st.session_state.edit_form_version += 1
+                    st.rerun()
+                if st.button("Delete", key=f"delete_{expense_id}", use_container_width=True):
+                    delete_expense(expense_id)
                     st.rerun()
 
     st.caption(
-        f"Expenses, budgets, and attached bills are saved in SQLite at {DB_PATH}."
+        f"Expenses, budgets, and attached bills are saved in {database_storage_label()}."
     )
 
 
