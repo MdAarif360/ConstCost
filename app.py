@@ -928,15 +928,30 @@ def apply_page_styles() -> None:
                 padding-bottom: 3rem;
                 max-width: 1180px;
             }
-            div[data-testid="stMetric"] {
+            .summary-metric-card {
                 background: #ffffff;
                 border: 1px solid #e2e8f0;
                 border-radius: 8px;
                 padding: 1rem;
                 box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+                min-height: 122px;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
             }
-            div[data-testid="stMetric"] label {
+            .summary-metric-label {
                 color: #64748b;
+                font-size: 1rem;
+                line-height: 1.25;
+                margin-bottom: 0.9rem;
+            }
+            .summary-metric-value {
+                color: #0f172a;
+                font-size: clamp(1.65rem, 2.15vw, 2.28rem);
+                font-weight: 500;
+                line-height: 1.1;
+                letter-spacing: 0;
+                white-space: nowrap;
             }
             .section-title {
                 margin: 1.5rem 0 0.75rem;
@@ -1000,6 +1015,18 @@ def apply_page_styles() -> None:
     )
 
 
+def render_summary_metric(column: Any, label: str, value: str) -> None:
+    column.markdown(
+        (
+            '<div class="summary-metric-card">'
+            f'<div class="summary-metric-label">{html.escape(label)}</div>'
+            f'<div class="summary-metric-value">{html.escape(value)}</div>'
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 def render_header() -> None:
     left, right = st.columns([0.72, 0.28], vertical_alignment="center")
     with left:
@@ -1024,10 +1051,10 @@ def render_summary(frame: pd.DataFrame, category_totals: dict[str, float]) -> No
     bills_attached = int(frame["receipt_name"].notna().sum()) if not frame.empty else 0
 
     cols = st.columns(4)
-    cols[0].metric("Total Budget", format_money(budget))
-    cols[1].metric("Total Spent", format_money(spent))
-    cols[2].metric("Remaining", format_money(remaining))
-    cols[3].metric("Bills Attached", f"{bills_attached} / {len(frame)}")
+    render_summary_metric(cols[0], "Total Budget", format_money(budget))
+    render_summary_metric(cols[1], "Total Spent", format_money(spent))
+    render_summary_metric(cols[2], "Remaining", format_money(remaining))
+    render_summary_metric(cols[3], "Bills Attached", f"{bills_attached} / {len(frame)}")
 
     st.markdown('<div class="section-title">Budget Used</div>', unsafe_allow_html=True)
     st.markdown(
