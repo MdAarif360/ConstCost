@@ -712,6 +712,8 @@ def normalize_category(raw: str) -> str | None:
         return "Labour"
     if value.startswith("mat"):
         return "Material"
+    if value.startswith("serv"):
+        return "ServiceCharge"
     if value.startswith("misc") or value.startswith("other"):
         return "Misc"
     return None
@@ -978,6 +980,11 @@ def apply_page_styles() -> None:
                 color: #0369a1;
                 background: #e0f2fe;
                 border-color: #bae6fd;
+            }
+            .chip-ServiceCharge {
+                color: #f95703;
+                background: #ede9fe;
+                border-color: #ddd6fe;
             }
             .chip-Misc {
                 color: #6d28d9;
