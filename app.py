@@ -46,6 +46,7 @@ CATEGORY_COLORS = {
 DEFAULT_CATEGORY_BUDGETS = {
     "Labour": 5000000.0,
     "Material": 5000000.0,
+    "ServiceCharge":1500000.0,
     "Misc": 250000.0,
 }
 
