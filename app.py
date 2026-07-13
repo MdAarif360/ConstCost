@@ -16,7 +16,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 
-CATEGORIES = ["Labour", "Material", "Misc"]
+CATEGORIES = ["Labour", "Material", "ServiceCharge","Misc"]
 PHASES = [
     "Foundation",
     "Compound Wall",
@@ -39,6 +39,7 @@ CURRENCY_SYMBOLS = {
 CATEGORY_COLORS = {
     "Labour": "#059669",
     "Material": "#0284c7",
+    "ServiceCharge": "#f95703",    
     "Misc": "#7c3aed",
 }
 
