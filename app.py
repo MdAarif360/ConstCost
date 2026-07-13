@@ -237,6 +237,7 @@ CSV_TEMPLATE = (
     "Date,Category,Phase,Description,Amount\n"
     "2026-01-15,Material,Foundation,Cement - 50 bags,27500\n"
     "2026-01-18,Labour,Foundation,Excavation labour,15000\n"
+    "2026-01-20,ServiceCharge,Foundation,Bill1 fee,6000\n"
     "2026-01-20,Misc,General,Site permit fee,5000\n"
 )
 
