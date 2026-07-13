@@ -19,10 +19,12 @@ from sqlalchemy.engine import Engine
 CATEGORIES = ["Labour", "Material", "Misc"]
 PHASES = [
     "Foundation",
+    "Compound Wall",
     "Structure",
     "Masonry",
     "Roofing",
-    "Plumbing & Electrical",
+    "Plumbing",
+    "Electrical",
     "Finishing",
     "Interior",
     "Exterior",
@@ -32,9 +34,6 @@ PHASES = [
 
 CURRENCY_SYMBOLS = {
     "INR": "Rs ",
-    "USD": "$",
-    "EUR": "EUR ",
-    "GBP": "GBP ",
 }
 
 CATEGORY_COLORS = {
@@ -44,8 +43,8 @@ CATEGORY_COLORS = {
 }
 
 DEFAULT_CATEGORY_BUDGETS = {
-    "Labour": 900000.0,
-    "Material": 1400000.0,
+    "Labour": 5000000.0,
+    "Material": 5000000.0,
     "Misc": 250000.0,
 }
 
