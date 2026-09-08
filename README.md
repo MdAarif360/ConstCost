@@ -39,6 +39,13 @@ SQLite is useful for local testing, but Streamlit Community Cloud can reset app
 files during redeploys or infrastructure restarts. Use PostgreSQL for data that
 must remain permanently available.
 
+## Google Sheets Alternative
+
+`gsheets/` holds an alternate version of this app that stores everything in a
+Google Sheet instead of PostgreSQL/Supabase. Same UI, same features; the
+spreadsheet becomes the database and uploaded bills go to a Google Drive folder
+(or into the sheet itself). See [gsheets/README.md](gsheets/README.md) for setup.
+
 ## Run Locally
 
 ```bash

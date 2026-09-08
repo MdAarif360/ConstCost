@@ -1,0 +1,10 @@
+streamlit>=1.36
+pandas>=2.2
+plotly>=5.22
+gspread>=6.0
+google-auth>=2.30
+# Only needed when GDRIVE_FOLDER_ID is set (bills stored in Google Drive).
+google-api-python-client>=2.130
+# Only needed locally, once, to run authorize_google.py (OAuth2 setup).
+# Not required by the deployed app -- do not add to the deploy environment.
+# google-auth-oauthlib>=1.2
