@@ -784,6 +784,7 @@ def render_charts(frame: pd.DataFrame, category_totals: dict[str, float]) -> Non
                 color="phase",
                 color_discrete_sequence=px.colors.qualitative.Set2,
             )
+            fig.update_yaxes(categoryorder="total ascending")
             fig.update_layout(
                 showlegend=False,
                 margin=dict(l=10, r=10, t=20, b=10),
