@@ -30,6 +30,12 @@ PHASES = [
     "Other",
 ]
 
+PAYMENTTYPES = [
+    "Online",
+    "Cash",
+    "Other",
+]
+
 CURRENCY_SYMBOLS = {
     "INR": "Rs ",
 }
@@ -212,11 +218,11 @@ SEED_EXPENSES = [
 ]
 
 CSV_TEMPLATE = (
-    "Date,Category,Phase,Description,Amount\n"
-    "2026-01-15,Material,Foundation,Cement - 50 bags,27500\n"
-    "2026-01-18,Labour,Foundation,Excavation labour,15000\n"
-    "2026-01-20,ServiceCharge,Foundation,Bill1 fee,6000\n"
-    "2026-01-20,Misc,General,Site permit fee,5000\n"
+    "Date,Category,Phase,Description,Amount,PaymentType\n"
+    "2026-01-15,Material,Foundation,Cement - 50 bags,27500,Online\n"
+    "2026-01-18,Labour,Foundation,Excavation labour,15000,Online\n"
+    "2026-01-20,ServiceCharge,Foundation,Bill1 fee,6000,Online\n"
+    "2026-01-20,Misc,General,Site permit fee,5000,Online\n"
 )
 
 
@@ -365,6 +371,7 @@ def get_expenses_frame() -> pd.DataFrame:
         "date",
         "category",
         "phase",
+        "paymenttype",
         "description",
         "amount",
         "receipt_name",
@@ -487,6 +494,7 @@ def import_expenses_from_csv(uploaded_file: Any) -> tuple[int, int, list[str]]:
         raw_date = cell(row, "date")
         raw_category = cell(row, "category")
         raw_phase = cell(row, "phase", "General")
+        raw_paymenttype = cell(row, "paymenttype")
         raw_description = cell(row, "description")
         raw_amount = cell(row, "amount")
 
@@ -517,6 +525,7 @@ def import_expenses_from_csv(uploaded_file: Any) -> tuple[int, int, list[str]]:
                 "date": date_value,
                 "category": category,
                 "phase": raw_phase or "General",
+                "paymenttype": raw_paymenttype,
                 "description": raw_description,
                 "amount": amount,
             }
@@ -880,10 +889,11 @@ def render_add_expense_form() -> None:
     st.markdown('<div class="section-title">Add Expense</div>', unsafe_allow_html=True)
     form_key = st.session_state.add_form_version
     with st.form(f"add_expense_form_{form_key}"):
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         expense_date = col1.date_input("Date", value=date.today())
         category = col2.selectbox("Category", CATEGORIES, index=1)
         phase = col3.selectbox("Phase", PHASES)
+        paymenttype = col5.selectbox("paymenttype", PAYMENTTYPES)
         amount = col4.number_input("Amount", min_value=0.0, step=1000.0)
         description = st.text_input("Description", placeholder="Cement - 50 bags")
         receipt = st.file_uploader(
@@ -928,11 +938,13 @@ def render_edit_expense_form(expense: dict[str, Any]) -> None:
 
     category_value = str(expense.get("category", CATEGORIES[0]))
     phase_value = str(expense.get("phase", PHASES[0]))
+    paymenttype_value = str(expense.get("paymenttype", PAYMENTTYPES[0]))
     category_index = CATEGORIES.index(category_value) if category_value in CATEGORIES else 0
     phase_index = PHASES.index(phase_value) if phase_value in PHASES else 0
+    paymenttype_index = PAYMENTTYPES.index(paymenttype_value) if paymenttype_value in PAYMENTTYPES else 0
 
     with st.form(form_key):
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         edited_date = col1.date_input(
             "Date",
             value=expense_date_for_input(expense.get("date")),
@@ -949,6 +961,12 @@ def render_edit_expense_form(expense: dict[str, Any]) -> None:
             PHASES,
             index=phase_index,
             key=f"edit_phase_{expense_id}",
+        )
+        edited_paymenttype = col5.selectbox(
+            "PaymentType",
+            PAYMENTTYPES,
+            index=paymenttype_index,
+            key=f"edited_paymenttype_{expense_id}",
         )
         edited_amount = col4.number_input(
             "Amount",
@@ -997,6 +1015,7 @@ def render_edit_expense_form(expense: dict[str, Any]) -> None:
             "category": edited_category,
             "phase": edited_phase,
             "description": edited_description.strip(),
+            "paymenttype": edited_paymenttype,
             "amount": float(edited_amount),
         }
     )
@@ -1053,6 +1072,7 @@ def render_expense_log(frame: pd.DataFrame) -> None:
     st.markdown('<div class="section-title">Expense Log</div>', unsafe_allow_html=True)
     tools_left, tools_right = st.columns([0.35, 0.65], vertical_alignment="bottom")
     selected_category = tools_left.selectbox("Filter", ["All"] + CATEGORIES)
+    selected_paymenttype = tools_left.selectbox("Filter", ["All"] + PAYMENTTYPES)
 
     with tools_right:
         if st.session_state.clear_confirm:
@@ -1078,6 +1098,12 @@ def render_expense_log(frame: pd.DataFrame) -> None:
     display_frame = display_frame.sort_values(
         by=["date_value", "id"], ascending=[False, False], na_position="last"
     )
+    if selected_paymenttype != "All":
+        display_frame = display_frame[display_frame["paymenttype"] == selected_paymenttype]
+    display_frame = display_frame.sort_values(
+        by=["date_value", "id"], ascending=[False, False], na_position="last"
+    )
+
 
     if display_frame.empty:
         st.info("No data available.")
@@ -1112,9 +1138,13 @@ def render_expense_log(frame: pd.DataFrame) -> None:
                 st.markdown(
                     f'<span class="category-chip chip-{html.escape(category)}">'
                     f"{html.escape(category)}</span> "
-                    f'<span class="muted">{html.escape(str(expense["phase"]))}</span>',
+                    f'<span class="muted">{html.escape(str(expense["phase"]))}</span>'
+                    f'<span class="muted">----</span>'
+                    f'<span class="muted">{html.escape(str(expense["paymenttype"]))}</span>',
+                                        
                     unsafe_allow_html=True,
                 )
+                
                 st.markdown(f"**{html.escape(str(expense['description']))}**")
                 st.caption(str(expense["date"]))
             with amount_col:

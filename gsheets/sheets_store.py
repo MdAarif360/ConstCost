@@ -53,6 +53,7 @@ EXPENSE_HEADER = [
     "phase",
     "description",
     "amount",
+    "paymenttype",
     "receipt_name",
     "receipt_type",
     "receipt_ref",
@@ -589,6 +590,7 @@ def _expense_row(expense: dict[str, Any], created_at: str, receipt_ref: str) -> 
         _text(expense.get("phase")),
         _text(expense.get("description")),
         float(expense.get("amount") or 0.0),
+        _text(expense.get("paymenttype")),
         _text(expense.get("receipt_name")),
         _text(expense.get("receipt_type")),
         receipt_ref,
@@ -605,10 +607,11 @@ def _expense_record(row: list[Any]) -> dict[str, Any]:
         "phase": _text(padded[3]) or "General",
         "description": _text(padded[4]),
         "amount": _to_float(padded[5]),
-        "receipt_name": _text(padded[6]) or None,
-        "receipt_type": _text(padded[7]) or None,
-        "receipt_ref": _text(padded[8]) or None,
-        "created_at": _text(padded[9]),
+        "paymenttype": _text(padded[6]),
+        "receipt_name": _text(padded[7]) or None,
+        "receipt_type": _text(padded[8]) or None,
+        "receipt_ref": _text(padded[9]) or None,
+        "created_at": _text(padded[10]),
     }
 
 
@@ -823,7 +826,8 @@ def update_expense_details(expense: dict[str, Any]) -> None:
                 _text(expense.get("category")),
                 _text(expense.get("phase")),
                 _text(expense.get("description")),
-                float(expense.get("amount") or 0.0),
+                _text(expense.get("paymenttype")),
+                float(expense.get("amount") or 0.0),                
             ]
         ],
         value_input_option="RAW",
